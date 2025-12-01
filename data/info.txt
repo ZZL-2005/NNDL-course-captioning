@@ -1,0 +1,12 @@
+(nndl) chenzhican@ubuntu-ESC8000-G4:~/zhangzilu/hwnndl$ python scripts/preprocess.py
+[OK] Saved vocab: 109 tokens
+Token entropy H(X): 5.5533 bits
+Prefix(full)->next-token entropy H(Y|X): 0.3272 bits
+Train: 34035, Val: 4254, Test: 4255
+[Building JSON] processed/train.json samples=34035
+[OK] Saved processed/train.json
+[Building JSON] processed/val.json samples=4254
+[OK] Saved processed/val.json
+[Building JSON] processed/test.json samples=4255
+[OK] Saved processed/test.json
+=== DONE ===
