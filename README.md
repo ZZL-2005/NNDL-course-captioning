@@ -1,451 +1,311 @@
 # NNDL-course-captioning
 
-## 数据格式说明
+> 神经网络与深度学习课程项目：基于 ViT + Transformer 的服装图像描述生成
 
-模型输入数据都准备为了json格式：
-<!-- 
+## 📋 项目简介
+
+本项目实现了一个**图像描述生成 (Image Captioning)** 系统，输入一张服装图片，自动生成描述图中人物穿着的文本。
+
+**模型架构：**
+```
+图像 (224×224) → ViT Encoder (预训练) → 图像特征 → Transformer Decoder → 文本描述
+```
+
+**示例输出：**
+```
+输入: 一张女性穿着毛衣的图片
+输出: "the sweater this lady wears has long sleeves , its fabric is cotton , and it has pure color patterns ."
+```
+
+---
+
+## 📁 项目结构
+
+```
+NNDL-course-captioning/
+├── data/                       # 数据目录
+│   ├── train.json              # 训练集 (34035 样本)
+│   ├── val.json                # 验证集 (4254 样本)
+│   ├── test.json               # 测试集 (4255 样本)
+│   ├── vocab.json              # 词表 (109 tokens)
+│   ├── captions.json           # 原始描述数据
+│   └── preprocess.py           # 数据预处理脚本
+│
+├── models/                     # 模型定义
+│   ├── vit_encoder_decoder.py  # 主模型：ViT Encoder + Transformer Decoder
+│   └── vitbackbone.py          # ViT 骨干网络
+│
+├── trains/                     # 训练脚本
+│   └── task6.py                # 训练入口
+│
+├── eval/                       # 评测模块 ⭐
+│   ├── __init__.py             # 模块入口
+│   ├── stage1_predict.py       # Stage 1: 推理预测 + Loss 计算
+│   ├── stage2_metrics.py       # Stage 2: 指标计算 (METEOR/ROUGE/CIDEr/SPICE)
+│   └── evaluate.py             # 统一评测入口
+│
+├── tools/                      # 工具函数
+│   ├── dataset.py              # PyTorch Dataset 定义
+│   ├── functions.py            # collate_fn 等工具函数
+│   ├── token2id.py             # token → id 转换
+│   └── id2token.py             # id → token 转换
+│
+├── inference/                  # 推理模块 ⭐
+│   └── infer.py                # ImageCaptioner 推理类
+│
+├── experiments/                # 实验分析
+│   └── analysis1.ipynb         # 分析 notebook
+│
+└── outputs/                    # 输出目录 (训练时生成)
+    ├── ckpts/                  # 模型检查点
+    ├── test_results/           # 测试结果
+    └── eval_results/           # 评测结果
+```
+
+---
+
+## 📊 数据格式说明
+
+### 1. 数据集 JSON (`train.json` / `val.json` / `test.json`)
+
+每条数据包含图片路径、token ID 序列和序列长度：
+
+```json
 {
-    "img": "WOMEN-Jackets_Coats-id_00007765-03_2_side.jpg",
-    "cap_ids": [
-      1,
-      3,
-      35,
-      30,
-      99,
-      32,
-      15,
-      8,
-      21,
-      24,
-      45,
-      11,
-      6,
-      46,
-      24,
-      13,
-      14,
-      15,
-      25,
-      26,
-      17,
-      10,
-      30,
-      99,
-      6,
-      49,
-      39,
-      88,
-      56,
-      101,
-      89,
-      10,
-      2
-    ],
-    "length": 33
+  "img": "WOMEN-Jackets_Coats-id_00007765-03_2_side.jpg",
+  "cap_ids": [1, 3, 35, 30, 99, 32, 15, 8, 21, ..., 2],
+  "length": 33
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `img` | 图片文件名 |
+| `cap_ids` | token ID 序列，以 `<START>=1` 开头，`<END>=2` 结尾 |
+| `length` | 序列长度 (含 START 和 END) |
+
+### 2. 词表 JSON (`vocab.json`)
+
+包含 109 个 tokens，涵盖服装相关词汇：
+
+```json
+{
+  "token2id": {
+    "<PAD>": 0,
+    "<START>": 1,
+    "<END>": 2,
+    "the": 3,
+    "sweater": 35,
+    "cotton": 12,
+    ...
   },
-  {
-    "img": "WOMEN-Rompers_Jumpsuits-id_00003130-03_1_front.jpg",
-    "cap_ids": [
-      1,
-      3,
-      102,
-      6,
-      49,
-      39,
-      71,
-      19,
-      41,
-      34,
-      81,
-      17,
-      13,
-      39,
-      98,
-      29,
-      10,
-      3,
-      19,
-      41,
-      6,
-      34,
-      12,
-      11,
-      13,
-      45,
-      27,
-      6,
-      104,
-      10,
-      3,
-      29,
-      33,
-      34,
-      12,
-      11,
-      13,
-      81,
-      17,
-      10,
-      53,
-      6,
-      54,
-      55,
-      56,
-      101,
-      57,
-      10,
-      30,
-      44,
-      32,
-      39,
-      88,
-      10,
-      30,
-      99,
-      15,
-      91,
-      10,
-      2
-    ],
-    "length": 60
-  }，... -->
+  "id2token": {
+    "0": "<PAD>",
+    "1": "<START>",
+    "2": "<END>",
+    "3": "the",
+    ...
+  },
+  "freq": {
+    "the": 121842,
+    "is": 118379,
+    ...
+  }
+}
+```
 
-其中数字代表token序号。
+**特殊 Token：**
+| Token | ID | 说明 |
+|-------|-----|------|
+| `<PAD>` | 0 | 填充符 |
+| `<START>` | 1 | 序列开始 |
+| `<END>` | 2 | 序列结束 |
 
-词表也准备为了json格式：
-<!-- 
+---
+
+## 🚀 快速开始
+
+### 1. 环境要求
+
+```bash
+pip install torch torchvision tqdm
+pip install pycocoevalcap  # 评测指标 (可选)
+```
+
+### 2. 训练模型
+
+```bash
+# 修改 trains/task6.py 中的 image_root 为你的图片路径
+python trains/task6.py
+```
+
+**主要超参数：**
+| 参数 | 值 |
+|------|-----|
+| epochs | 20 |
+| batch_size | 32 |
+| learning_rate | 1e-4 |
+| d_model | 512 |
+| n_heads | 8 |
+| num_layers | 4 |
+
+### 3. 评测模型
+
+**方式一：Python 代码**
+```python
+from eval.evaluate import run_full_evaluation
+from models.vit_encoder_decoder import ImageCaptionModel
+import torch
+
+# 加载模型
+model = ImageCaptionModel(vocab_size=109)
+model.load_state_dict(torch.load("outputs/ckpts/epoch19.pth"))
+
+# 一键评测
+results = run_full_evaluation(
+    model=model,
+    data_json="data/val.json",
+    image_root="/your/image/path",  # 👈 修改为你的图片路径
+    output_dir="outputs/eval_results",
+)
+```
+
+**方式二：命令行**
+```bash
+python -m eval.evaluate \
+    --checkpoint outputs/ckpts/epoch19.pth \
+    --data_json data/val.json \
+    --image_root /your/image/path \
+    --output_dir outputs/eval_results
+```
+
+---
+
+## 📈 评测体系
+
+评测分为两个阶段：
+
+### Stage 1: 推理预测 (`stage1_predict.py`)
+
+- 输入：模型 + 数据集 + 图片路径
+- 输出：每个样本的 gt_text、pred_text、loss
+
+```json
 {
-    "token2id": {
-        "<PAD>": 0,
-        "<START>": 1,
-        "<END>": 2,
-        "the": 3,
-        "lower": 4,
-        "clothing": 5,
-        "is": 6,
-        "of": 7,
-        "long": 8,
-        "length": 9,
-        ".": 10,
-        "fabric": 11,
-        "cotton": 12,
-        "and": 13,
-        "it": 14,
-        "has": 15,
-        "plaid": 16,
-        "patterns": 17,
-        "his": 18,
-        "tank": 19,
-        "top": 20,
-        "sleeves": 21,
-        "cut": 22,
-        "off": 23,
-        ",": 24,
-        "pure": 25,
-        "color": 26,
-        "neckline": 27,
-        "round": 28,
-        "pants": 29,
-        "this": 30,
-        "man": 31,
-        "wears": 32,
-        "are": 33,
-        "with": 34,
-        "sweater": 35,
-        "stripe": 36,
-        "lapel": 37,
-        "gentleman": 38,
-        "a": 39,
-        "solid": 40,
-        "shirt": 41,
-        "short": 42,
-        "crew": 43,
-        "person": 44,
-        "its": 45,
-        "denim": 46,
-        "short-sleeve": 47,
-        "t-shirt": 48,
-        "wearing": 49,
-        "long-sleeve": 50,
-        "outer": 51,
-        "upper": 52,
-        "there": 53,
-        "an": 54,
-        "accessory": 55,
-        "on": 56,
-        "wrist": 57,
-        "square": 58,
-        "guy": 59,
-        "trousers": 60,
-        "medium": 61,
-        "medium-sleeve": 62,
-        "v-shape": 63,
-        "hat": 64,
-        "in": 65,
-        "head": 66,
-        "shorts": 67,
-        "lattice": 68,
-        "also": 69,
-        "waist": 70,
-        "sleeveless": 71,
-        "pattern": 72,
-        "complicated": 73,
-        "block": 74,
-        "striped": 75,
-        "leather": 76,
-        "stand": 77,
-        "belt": 78,
-        "sunglasses": 79,
-        "knitting": 80,
-        "graphic": 81,
-        "glasses": 82,
-        "hands": 83,
-        "or": 84,
-        "clothes": 85,
-        "pair": 86,
-        "other": 87,
-        "ring": 88,
-        "finger": 89,
-        "mixed": 90,
-        "neckwear": 91,
-        "neck": 92,
-        "no": 93,
-        "three-quarter": 94,
-        "socks": 95,
-        "shoes": 96,
-        "floral": 97,
-        "three-point": 98,
-        "lady": 99,
-        "chiffon": 100,
-        "her": 101,
-        "female": 102,
-        "woman": 103,
-        "suspenders": 104,
-        "leggings": 105,
-        "furry": 106,
-        "eyeglasses": 107,
-        "skirt": 108
-    },
-    "id2token": {
-        "0": "<PAD>",
-        "1": "<START>",
-        "2": "<END>",
-        "3": "the",
-        "4": "lower",
-        "5": "clothing",
-        "6": "is",
-        "7": "of",
-        "8": "long",
-        "9": "length",
-        "10": ".",
-        "11": "fabric",
-        "12": "cotton",
-        "13": "and",
-        "14": "it",
-        "15": "has",
-        "16": "plaid",
-        "17": "patterns",
-        "18": "his",
-        "19": "tank",
-        "20": "top",
-        "21": "sleeves",
-        "22": "cut",
-        "23": "off",
-        "24": ",",
-        "25": "pure",
-        "26": "color",
-        "27": "neckline",
-        "28": "round",
-        "29": "pants",
-        "30": "this",
-        "31": "man",
-        "32": "wears",
-        "33": "are",
-        "34": "with",
-        "35": "sweater",
-        "36": "stripe",
-        "37": "lapel",
-        "38": "gentleman",
-        "39": "a",
-        "40": "solid",
-        "41": "shirt",
-        "42": "short",
-        "43": "crew",
-        "44": "person",
-        "45": "its",
-        "46": "denim",
-        "47": "short-sleeve",
-        "48": "t-shirt",
-        "49": "wearing",
-        "50": "long-sleeve",
-        "51": "outer",
-        "52": "upper",
-        "53": "there",
-        "54": "an",
-        "55": "accessory",
-        "56": "on",
-        "57": "wrist",
-        "58": "square",
-        "59": "guy",
-        "60": "trousers",
-        "61": "medium",
-        "62": "medium-sleeve",
-        "63": "v-shape",
-        "64": "hat",
-        "65": "in",
-        "66": "head",
-        "67": "shorts",
-        "68": "lattice",
-        "69": "also",
-        "70": "waist",
-        "71": "sleeveless",
-        "72": "pattern",
-        "73": "complicated",
-        "74": "block",
-        "75": "striped",
-        "76": "leather",
-        "77": "stand",
-        "78": "belt",
-        "79": "sunglasses",
-        "80": "knitting",
-        "81": "graphic",
-        "82": "glasses",
-        "83": "hands",
-        "84": "or",
-        "85": "clothes",
-        "86": "pair",
-        "87": "other",
-        "88": "ring",
-        "89": "finger",
-        "90": "mixed",
-        "91": "neckwear",
-        "92": "neck",
-        "93": "no",
-        "94": "three-quarter",
-        "95": "socks",
-        "96": "shoes",
-        "97": "floral",
-        "98": "three-point",
-        "99": "lady",
-        "100": "chiffon",
-        "101": "her",
-        "102": "female",
-        "103": "woman",
-        "104": "suspenders",
-        "105": "leggings",
-        "106": "furry",
-        "107": "eyeglasses",
-        "108": "skirt"
-    },
-    "freq": {
-        "the": 121842,
-        "lower": 2404,
-        "clothing": 13114,
-        "is": 118379,
-        "of": 21374,
-        "long": 14049,
-        "length": 8685,
-        ".": 197655,
-        "fabric": 73406,
-        "cotton": 49586,
-        "and": 68623,
-        "it": 28190,
-        "has": 48517,
-        "plaid": 750,
-        "patterns": 70136,
-        "his": 8812,
-        "tank": 30363,
-        "top": 13029,
-        "sleeves": 21767,
-        "cut": 4207,
-        "off": 4207,
-        ",": 24795,
-        "pure": 22179,
-        "color": 45285,
-        "neckline": 27035,
-        "round": 8090,
-        "pants": 20275,
-        "this": 46441,
-        "man": 835,
-        "wears": 52329,
-        "are": 18122,
-        "with": 73098,
-        "sweater": 10679,
-        "stripe": 1624,
-        "lapel": 3162,
-        "gentleman": 1668,
-        "a": 82364,
-        "solid": 21946,
-        "shirt": 33820,
-        "short": 5311,
-        "crew": 8226,
-        "person": 23531,
-        "its": 11393,
-        "denim": 9677,
-        "short-sleeve": 4307,
-        "t-shirt": 6845,
-        "wearing": 21746,
-        "long-sleeve": 6640,
-        "outer": 5437,
-        "upper": 4806,
-        "there": 34173,
-        "an": 25271,
-        "accessory": 23445,
-        "on": 35107,
-        "wrist": 17030,
-        "square": 250,
-        "guy": 1738,
-        "trousers": 5941,
-        "medium": 1844,
-        "medium-sleeve": 1110,
-        "v-shape": 2741,
-        "hat": 4895,
-        "in": 9273,
-        "head": 2438,
-        "shorts": 14329,
-        "lattice": 738,
-        "also": 1826,
-        "waist": 981,
-        "sleeveless": 4277,
-        "pattern": 3270,
-        "complicated": 1104,
-        "block": 1160,
-        "striped": 1667,
-        "leather": 1523,
-        "stand": 850,
-        "belt": 1513,
-        "sunglasses": 628,
-        "knitting": 3722,
-        "graphic": 17011,
-        "glasses": 33,
-        "hands": 31,
-        "or": 31,
-        "clothes": 31,
-        "pair": 781,
-        "other": 2314,
-        "ring": 25596,
-        "finger": 17065,
-        "mixed": 1083,
-        "neckwear": 6297,
-        "neck": 6415,
-        "no": 4342,
-        "three-quarter": 601,
-        "socks": 881,
-        "shoes": 420,
-        "floral": 3026,
-        "three-point": 16995,
-        "lady": 21590,
-        "chiffon": 7300,
-        "her": 48779,
-        "female": 21509,
-        "woman": 10766,
-        "suspenders": 3716,
-        "leggings": 1039,
-        "furry": 402,
-        "eyeglasses": 2,
-        "skirt": 1328
+  "img": "xxx.jpg",
+  "gt_ids": [3, 19, 20, ...],
+  "gt_text": "the tank top this female wears ...",
+  "pred_ids": [3, 35, 30, ...],
+  "pred_text": "the sweater this ...",
+  "loss": 0.123456
+}
+```
+
+### Stage 2: 指标计算 (`stage2_metrics.py`)
+
+- 输入：Stage 1 的输出
+- 输出：每个样本的四个指标 + 整体统计
+
+```json
+{
+  "summary": {
+    "total_samples": 4254,
+    "avg_loss": 0.5234,
+    "avg_metrics": {
+      "METEOR": 0.3521,
+      "ROUGE_L": 0.4123,
+      "CIDEr": 1.2345,
+      "SPICE": 0.2134
     }
-} -->
+  },
+  "samples": [...]
+}
+```
+
+**评测指标：**
+| 指标 | 说明 |
+|------|------|
+| METEOR | 考虑同义词和词形变化的匹配 |
+| ROUGE-L | 最长公共子序列 |
+| CIDEr-D | 基于 TF-IDF 的共识度量 |
+| SPICE | 基于场景图的语义匹配 (需 Java) |
+
+---
+
+## 🔮 推理使用
+
+### 方式一：Python 代码
+
+```python
+from inference.infer import ImageCaptioner, load_captioner
+
+# 方法1: 使用便捷函数一键加载
+captioner = load_captioner(checkpoint="outputs/ckpts/epoch19.pth")
+
+# 方法2: 手动加载模型
+from models.vit_encoder_decoder import ImageCaptionModel
+import torch
+
+model = ImageCaptionModel(vocab_size=109)
+model.load_state_dict(torch.load("outputs/ckpts/epoch19.pth"))
+captioner = ImageCaptioner(model)
+
+# 单张图片推理
+caption = captioner.predict("path/to/image.jpg")
+print(caption)  # "the sweater this lady wears has long sleeves ..."
+
+# 返回 ID 序列
+result = captioner.predict("image.jpg", return_ids=True)
+print(result)  # {"text": "...", "ids": [3, 35, 30, ...]}
+
+# 批量推理
+captions = captioner.predict_batch(["img1.jpg", "img2.jpg", "img3.jpg"])
+
+# 文件夹推理
+results = captioner.predict_folder("path/to/folder", output_json="results.json")
+```
+
+### 方式二：命令行
+
+```bash
+# 单张图片
+python -m inference.infer \
+    --checkpoint outputs/ckpts/epoch19.pth \
+    --image path/to/image.jpg
+
+# 批量推理文件夹
+python -m inference.infer \
+    --checkpoint outputs/ckpts/epoch19.pth \
+    --folder path/to/images \
+    --output results.json
+```
+
+---
+
+## 🔧 扩展开发
+
+如果你要添加新的训练任务：
+
+1. 在 `trains/` 下创建新的训练脚本 (如 `task7.py`)
+2. 训练完成后得到权重文件
+3. 使用评测模块进行统一评测：
+
+```python
+from eval.evaluate import run_full_evaluation
+
+results = run_full_evaluation(
+    model=your_model,
+    data_json="data/test.json",
+    image_root="/your/image/path",
+    experiment_name="task7_experiment",
+)
+```
+
+---
+
+## 📝 License
+
+MIT License
 
 
 
