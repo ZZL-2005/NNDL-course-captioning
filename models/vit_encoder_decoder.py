@@ -2,7 +2,51 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
-from vitbackbone import ViTEncoder
+from models.vitbackbone import ViTEncoder
+
+class TransformerDecoderLayerWithAttn(nn.TransformerDecoderLayer):
+    """
+    自定义 DecoderLayer，用于在 forward 过程中保存 attention weights。
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.self_attn_map = None
+        self.cross_attn_map = None
+        # Norms of the updates (what is added to the stream)
+        self.sa_update_norm = None
+        self.ca_update_norm = None
+        self.ffn_update_norm = None
+
+    def _sa_block(self, x, attn_mask, key_padding_mask, is_causal=False):
+        # 强制 need_weights=True
+        x, weights = self.self_attn(x, x, x,
+                           attn_mask=attn_mask,
+                           key_padding_mask=key_padding_mask,
+                           need_weights=True,
+                           is_causal=is_causal)
+        self.self_attn_map = weights
+        output = self.dropout1(x)
+        self.sa_update_norm = output.norm(p=2, dim=-1).detach()
+        return output
+
+    def _mha_block(self, x, mem, attn_mask, key_padding_mask, is_causal=False):
+        # 强制 need_weights=True
+        x, weights = self.multihead_attn(x, mem, mem,
+                                attn_mask=attn_mask,
+                                key_padding_mask=key_padding_mask,
+                                need_weights=True,
+                                is_causal=is_causal)
+        self.cross_attn_map = weights
+        output = self.dropout2(x)
+        self.ca_update_norm = output.norm(p=2, dim=-1).detach()
+        return output
+
+    def _ff_block(self, x):
+        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        output = self.dropout3(x)
+        self.ffn_update_norm = output.norm(p=2, dim=-1).detach()
+        return output
+
 class CaptionTransformerDecoder(nn.Module):
     """
     标准 Transformer Decoder：
@@ -29,7 +73,8 @@ class CaptionTransformerDecoder(nn.Module):
         self.token_emb = nn.Embedding(vocab_size, d_model, padding_idx=pad_idx)
         self.pos_emb = nn.Embedding(max_len, d_model)
 
-        decoder_layer = nn.TransformerDecoderLayer(
+        # 使用自定义 Layer 以支持 attention 可视化
+        decoder_layer = TransformerDecoderLayerWithAttn(
             d_model=d_model,
             nhead=n_heads,
             dim_feedforward=dim_ff,
@@ -41,6 +86,10 @@ class CaptionTransformerDecoder(nn.Module):
         )
 
         self.fc_out = nn.Linear(d_model, vocab_size)
+
+    @property
+    def decoder_layers(self):
+        return self.decoder.layers
 
     @staticmethod
     def _generate_square_subsequent_mask(L: int, device: torch.device) -> torch.Tensor:
@@ -177,3 +226,5 @@ class ImageCaptionModel(nn.Module):
                 break
 
         return ys
+
+

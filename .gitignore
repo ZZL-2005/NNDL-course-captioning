@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Outputs and Checkpoints
+outputs/
+trains/outputs_lm/
+*.pth
+*.ckpt
+logs/
+experiments/outputs/
+
+# System
+.DS_Store
