@@ -2,6 +2,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import timm
+import os
+
+
+def _find_vit_ckpt_path() -> str | None:
+    """Return a local checkpoint path if configured and exists, else None."""
+    # 1) explicit env var wins
+    env_path = os.environ.get("VIT_CKPT_PATH", "").strip()
+    if env_path and os.path.isfile(env_path):
+        return env_path
+
+    # 2) try common relative locations from repo root
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    candidates = [
+        os.path.join(repo_root, "weights", "jx_vit_base_p16_224-80ecf9dd.pth"),
+        os.path.join(repo_root, "model", "weights", "jx_vit_base_p16_224-80ecf9dd.pth"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+
+    return None
 
 class ViTEncoder(nn.Module):
     """
@@ -15,28 +36,32 @@ class ViTEncoder(nn.Module):
     def __init__(self, d_model=512, num_img_tokens=None, freeze=False):
         super().__init__()
 
-        # 1) 先创建 ViT 模型，但不让它联网
+        # Prefer a local checkpoint if available; otherwise fall back to timm pretrained weights.
+        ckpt_path = _find_vit_ckpt_path()
+        use_pretrained = ckpt_path is None
+
+        # 1) 创建 ViT 模型
         self.vit = timm.create_model(
-            'vit_base_patch16_224',
-            pretrained=False,      # ← 必须为 False！否则会去 HuggingFace 拉权重
-            num_classes=0          # ← 去掉头部（我们只要 features）
+            "vit_base_patch16_224",
+            pretrained=use_pretrained,
+            num_classes=0,
         )
 
-        # 2) 你的本地权重路径（请确认路径一致）
-        ckpt_path = "/home/chenzhican/zhangzilu/hwnndl/model/weights/jx_vit_base_p16_224-80ecf9dd.pth"
+        # 2) 如果有本地权重，则手动加载（并覆盖 timm 初始化权重）
+        if ckpt_path is not None:
+            print(f"[INFO] Loading local ViT weights from: {ckpt_path}")
 
-        print(f"[INFO] Loading local ViT weights from: {ckpt_path}")
+            state_dict = torch.load(ckpt_path, map_location="cpu")
+            # timm 权重格式可能是 {'model': {...}} 或直接 state_dict
+            if isinstance(state_dict, dict) and "model" in state_dict:
+                state_dict = state_dict["model"]
 
-        # 3) 加载 checkpoint
-        state_dict = torch.load(ckpt_path, map_location="cpu")
-
-        # timm 权重格式可能是 {'model': {...}} 或直接 state_dict
-        if isinstance(state_dict, dict) and "model" in state_dict:
-            state_dict = state_dict["model"]
-
-        missing, unexpected = self.vit.load_state_dict(state_dict, strict=False)
-        print("[INFO] Missing keys:", missing)
-        print("[INFO] Unexpected keys:", unexpected)
+            missing, unexpected = self.vit.load_state_dict(state_dict, strict=False)
+            print("[INFO] Missing keys:", missing)
+            print("[INFO] Unexpected keys:", unexpected)
+        else:
+            print("[INFO] No local ViT checkpoint found; using timm pretrained weights.")
+            print("[INFO] Tip: set env var VIT_CKPT_PATH to a local .pth to avoid downloads.")
 
         # 4) 冻结 ViT（可选）
         if freeze:

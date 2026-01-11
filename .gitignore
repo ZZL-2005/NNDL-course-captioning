@@ -16,3 +16,6 @@ experiments/outputs/
 
 # System
 .DS_Store
+
+.html
+experiments/out/
